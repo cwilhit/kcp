@@ -46,6 +46,16 @@ func newCtxMetadataClient(client kcpmetadataclient.ClusterInterface) metadata.In
 }
 
 func (c *ctxMetadataClient) Resource(resource schema.GroupVersionResource) metadata.Getter {
+	// The upstream collector can discover an owner through an old ownerReference.
+	// Its APIExport v1alpha1 metadata PATCH still validates the complete object,
+	// but that version cannot represent v1alpha2 label-scoped permission claims.
+	// Use the current APIExport version for this metadata-only client so normal
+	// GC patches preserve the selector rather than failing legacy validation.
+	// The resource identity, cluster, UID and resourceVersion preconditions are
+	// unchanged; callers of the ordinary API clients keep their selected version.
+	if resource.Group == "apis.kcp.io" && resource.Version == "v1alpha1" && resource.Resource == "apiexports" {
+		resource.Version = "v1alpha2"
+	}
 	return &ctxMetadataGetter{client: c.client, resource: resource}
 }
 
