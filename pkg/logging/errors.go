@@ -19,8 +19,12 @@ package logging
 import (
 	"context"
 	"errors"
+	"log"
 	"net/http"
+	"strings"
 	"syscall"
+
+	"k8s.io/klog/v2"
 )
 
 // IsClientDisconnect reports whether err means the client went away rather than
@@ -42,4 +46,42 @@ func IsClientDisconnect(ctx context.Context, err error) bool {
 		errors.Is(err, http.ErrAbortHandler) ||
 		errors.Is(err, syscall.EPIPE) ||
 		errors.Is(err, syscall.ECONNRESET)
+}
+
+// streamEndings are the error texts httputil.ReverseProxy reports when a
+// response stream ends because a deadline or the client ended it, rather than
+// because the backend failed.
+var streamEndings = []string{
+	context.Canceled.Error(),
+	context.DeadlineExceeded.Error(),
+	syscall.EPIPE.Error(),
+	syscall.ECONNRESET.Error(),
+}
+
+// NewReverseProxyErrorLog returns a logger for httputil.ReverseProxy.ErrorLog.
+//
+// Without one, the proxy writes to the standard library logger, which ends up in
+// klog without a level a log pipeline can trust. Most of what it reports there
+// is a watch reaching its timeout mid-stream ("read error during body copy:
+// context deadline exceeded") or a client going away, which happens all the
+// time on a busy proxy and is not a fault. Those are logged at V(4); anything
+// else is logged as an error.
+func NewReverseProxyErrorLog(logger klog.Logger) *log.Logger {
+	return log.New(reverseProxyLogWriter{logger: logger}, "", 0)
+}
+
+type reverseProxyLogWriter struct {
+	logger klog.Logger
+}
+
+func (w reverseProxyLogWriter) Write(p []byte) (int, error) {
+	msg := strings.TrimSpace(string(p))
+	for _, ending := range streamEndings {
+		if strings.Contains(msg, ending) {
+			w.logger.V(4).Info(msg)
+			return len(p), nil
+		}
+	}
+	w.logger.Error(nil, msg)
+	return len(p), nil
 }

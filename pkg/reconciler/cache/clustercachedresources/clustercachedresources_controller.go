@@ -279,6 +279,12 @@ func (c *Controller) process(ctx context.Context, key string) (bool, error) {
 	oldResource := &ClusterCachedResourceResource{ObjectMeta: old.ObjectMeta, Spec: &old.Spec, Status: &old.Status}
 	newResource := &ClusterCachedResourceResource{ObjectMeta: clusterCachedResource.ObjectMeta, Spec: &clusterCachedResource.Spec, Status: &clusterCachedResource.Status}
 	if err := c.commit(ctx, oldResource, newResource); err != nil {
+		if kerrors.IsConflict(err) && len(errs) == 0 {
+			// Someone else wrote the object after our cache saw it. That write
+			// enqueues it again, so retry quietly instead of reporting a failure.
+			logger.V(4).Info("conflict committing ClusterCachedResource, requeueing", "err", err)
+			return true, nil
+		}
 		errs = append(errs, err)
 	}
 
